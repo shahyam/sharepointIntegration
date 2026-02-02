@@ -4,3 +4,28 @@ GET {{sharepointIntegration_HostAddress}}/weatherforecast/
 Accept: application/json
 
 ###
+
+GET {{sharepointIntegration_HostAddress}}/graph/me
+Accept: application/json
+
+###
+
+GET {{sharepointIntegration_HostAddress}}/graph/drive/root
+Accept: application/json
+
+###
+
+GET {{sharepointIntegration_HostAddress}}/graph/users/{userId}
+Accept: application/json
+
+###
+
+GET {{sharepointIntegration_HostAddress}}/graph/users/{userId}/drive/root
+Accept: application/json
+
+###
+
+GET {{sharepointIntegration_HostAddress}}/graph/sites/{siteId}/drives/{driveId}/folders?folderPath=/Shared%20Documents/General
+Accept: application/json
+
+###
