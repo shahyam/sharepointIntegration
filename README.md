@@ -41,7 +41,28 @@ After that, `/graph/users/{userId}/drive/root` should succeed for the licensed u
 - `GET /graph/drive/root` – returns the root drive for the user.
 - `GET /graph/users/{userId}` – returns a user by ID or UPN (app-only compatible).
 - `GET /graph/users/{userId}/drive/root` – returns a user drive root (app-only compatible).
+- `GET /graph/users/drive/root/folders` – lists folders under the configured user's drive root.
+- `POST /graph/users/drive/root/folders?folderName=Reports` – creates a folder under the configured user's drive root.
+- `POST /graph/users/drive/root/folders/upload?folderPath=Shared Documents/Reports` – uploads a Word/Excel/PDF/email file (max 50 MB).
+- `POST /graph/users/drive/root/folders/secure` – creates a folder and grants access only to specified users.
 - `GET /graph/sites/{siteId}/drives/{driveId}/folders?folderPath=/Shared Documents/Reports` – returns a folder from a SharePoint document library (app-only compatible).
+
+## Folder access control
+
+The `POST /graph/users/drive/root/folders/secure` endpoint creates a folder and restricts access to the recipient list you provide:
+
+- The folder is created in the user's drive (OneDrive) under `folderPath`.
+- Recipients are granted either `read` or `write` access.
+- When `removeExistingPermissions` is `true`, non-owner permissions are removed so only the specified users retain access.
+
+### Required permissions
+
+To manage folder permissions, your app must have **application** permissions:
+
+- `Files.ReadWrite.All`
+- `Sites.ReadWrite.All`
+
+Grant **admin consent** after adding these permissions.
 
 ## Swagger
 

@@ -25,6 +25,42 @@ Accept: application/json
 
 ###
 
+GET {{sharepointIntegration_HostAddress}}/graph/users/drive/root/folders
+Accept: application/json
+
+###
+
+POST {{sharepointIntegration_HostAddress}}/graph/users/drive/root/folders?folderName=Reports
+Accept: application/json
+
+###
+
+POST {{sharepointIntegration_HostAddress}}/graph/users/drive/root/folders/upload?folderPath=Shared%20Documents/Reports
+Content-Type: multipart/form-data; boundary=boundary
+
+--boundary
+Content-Disposition: form-data; name="file"; filename="Sample.pdf"
+Content-Type: application/pdf
+
+< ./Sample.pdf
+--boundary--
+
+###
+
+POST {{sharepointIntegration_HostAddress}}/graph/users/drive/root/folders/secure
+Content-Type: application/json
+
+{
+	"folderName": "Finance",
+	"folderPath": "Shared Documents",
+	"recipients": [ "user1@contoso.com", "user2@contoso.com" ],
+	"role": "write",
+	"removeExistingPermissions": true,
+	"message": "Folder access granted"
+}
+
+###
+
 GET {{sharepointIntegration_HostAddress}}/graph/sites/{siteId}/drives/{driveId}/folders?folderPath=/Shared%20Documents/General
 Accept: application/json
 
