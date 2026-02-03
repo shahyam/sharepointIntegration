@@ -55,6 +55,19 @@ The `POST /graph/users/drive/root/folders/secure` endpoint creates a folder and 
 - Recipients are granted either `read` or `write` access.
 - When `removeExistingPermissions` is `true`, non-owner permissions are removed so only the specified users retain access.
 
+### How permissions are assigned (specific users only)
+
+1. **Create the folder** using `POST /graph/users/drive/root/folders/secure`.
+2. The API **invites only the specified recipients** with `read` or `write` roles.
+3. When `removeExistingPermissions` is `true`, the API **removes any existing non-owner permissions** so only your specified users remain.
+
+If you prefer to do this manually with Graph:
+
+- Create the folder (`/drive/root/children` or `/drive/items/{parentId}/children`).
+- Invite specific users: `POST /drive/items/{itemId}/invite` with `recipients` and `roles`.
+- List permissions: `GET /drive/items/{itemId}/permissions`.
+- Remove permissions that are not allowed: `DELETE /drive/items/{itemId}/permissions/{permissionId}`.
+
 ### Required permissions
 
 To manage folder permissions, your app must have **application** permissions:
