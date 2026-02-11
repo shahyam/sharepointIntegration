@@ -327,7 +327,7 @@ public class GraphController : ControllerBase
         var requestUrl = $"{_graphClient.BaseUrl}/users/{userId}/drive/items/{itemId}/invite";
         var inviteRequest = new BaseRequest(requestUrl, _graphClient, null)
         {
-            Method = "POST"
+            Method = Microsoft.Graph.HttpMethods.POST
         };
 
         var payload = new
@@ -356,7 +356,7 @@ public class GraphController : ControllerBase
                 continue;
             }
 
-            var grantedUserId = permission.GrantedTo?.User?.Id;
+            var grantedUserId = permission.GrantedToV2?.User?.Id ?? permission.GrantedTo?.User?.Id;
 
             if (string.IsNullOrWhiteSpace(grantedUserId) || !allowedUserIds.Contains(grantedUserId))
             {

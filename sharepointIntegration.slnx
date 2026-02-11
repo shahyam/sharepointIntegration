@@ -1,0 +1,12 @@
+<Solution>
+  <Project Path="sharepointIntegration.csproj" Type="C#" />
+  <Properties>
+    <Property Name="Configuration">
+      <Value>Debug</Value>
+      <Value>Release</Value>
+    </Property>
+    <Property Name="Platform">
+      <Value>Any CPU</Value>
+    </Property>
+  </Properties>
+</Solution>
