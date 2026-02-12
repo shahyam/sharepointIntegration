@@ -1,0 +1,8 @@
+﻿dealteam1.1@zirconsam.onmicrosoft.com, deal@team1.1
+dealteam1.2@zirconsam.onmicrosoft.com, deal@team1.2
+dealteam2.1@zirconsam.onmicrosoft.com, deal@team2.1
+dealteam2.2@zirconsam.onmicrosoft.com, deal@team2.2
+
+
+
+
