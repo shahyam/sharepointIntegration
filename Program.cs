@@ -1,6 +1,6 @@
 using System.Reflection;
 using Microsoft.Extensions.Options;
-using Microsoft.Graph;
+using MSGraph = Microsoft.Graph;
 using Microsoft.Identity.Client;
 using Microsoft.OpenApi.Models;
 using sharepointIntegration.Options;
@@ -28,7 +28,7 @@ builder.Services.AddSwaggerGen(options =>
 });
 
 builder.Services.Configure<GraphOptions>(builder.Configuration.GetSection("Graph"));
-builder.Services.AddSingleton<GraphServiceClient>(serviceProvider =>
+builder.Services.AddSingleton<MSGraph.GraphServiceClient>(serviceProvider =>
 {
     var graphOptions = serviceProvider.GetRequiredService<IOptions<GraphOptions>>().Value;
 
@@ -50,7 +50,7 @@ builder.Services.AddSingleton<GraphServiceClient>(serviceProvider =>
         : new[] { "https://graph.microsoft.com/.default" };
 
     var authProvider = new GraphAuthProvider(confidentialClient, scopes);
-    return new GraphServiceClient(authProvider);
+    return new MSGraph.GraphServiceClient(authProvider);
 });
 
 var app = builder.Build();

@@ -243,31 +243,55 @@ public class GraphController : ControllerBase
                 ? request.FolderName
                 : $"{trimmedFolderPath}/{request.FolderName}";
 
-            var driveItem = new DriveItem
+            // Check if folder already exists
+            DriveItem? createdFolder = null;
+            try
             {
-                Name = request.FolderName,
-                Folder = new Folder(),
-                AdditionalData = new Dictionary<string, object>
+                createdFolder = await _graphClient.Users[userId].Drive.Root
+                    .ItemWithPath(targetPath)
+                    .Request()
+                    .GetAsync();
+                
+                // If folder doesn't exist or is not a folder, we'll create it
+                if (createdFolder?.Folder == null)
                 {
-                    ["@microsoft.graph.conflictBehavior"] = "rename"
+                    createdFolder = null;
                 }
-            };
-
-            DriveItem createdFolder;
-            if (string.IsNullOrWhiteSpace(trimmedFolderPath))
-            {
-                createdFolder = await _graphClient.Users[userId].Drive.Root
-                    .Children
-                    .Request()
-                    .AddAsync(driveItem);
             }
-            else
+            catch (ServiceException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
-                createdFolder = await _graphClient.Users[userId].Drive.Root
-                    .ItemWithPath(trimmedFolderPath)
-                    .Children
-                    .Request()
-                    .AddAsync(driveItem);
+                // Folder doesn't exist, we'll create it below
+                createdFolder = null;
+            }
+
+            // Create folder only if it doesn't exist
+            if (createdFolder == null)
+            {
+                var driveItem = new DriveItem
+                {
+                    Name = request.FolderName,
+                    Folder = new Folder(),
+                    AdditionalData = new Dictionary<string, object>
+                    {
+                        ["@microsoft.graph.conflictBehavior"] = "fail"
+                    }
+                };
+
+                if (string.IsNullOrWhiteSpace(trimmedFolderPath))
+                {
+                    createdFolder = await _graphClient.Users[userId].Drive.Root
+                        .Children
+                        .Request()
+                        .AddAsync(driveItem);
+                }
+                else
+                {
+                    createdFolder = await _graphClient.Users[userId].Drive.Root
+                        .ItemWithPath(trimmedFolderPath)
+                        .Children
+                        .Request()
+                        .AddAsync(driveItem);
+                }
             }
 
             var recipients = request.Recipients
@@ -280,14 +304,25 @@ public class GraphController : ControllerBase
                 return BadRequest(new { message = "At least one valid recipient email is required." });
             }
 
-            var inviteRoles = new List<string> { role };
-            await SendInviteAsync(createdFolder.Id, recipients, inviteRoles, request.Message);
-
+            // Remove unwanted permissions BEFORE adding new ones
             if (request.RemoveExistingPermissions)
             {
                 var allowedUserIds = await ResolveRecipientIdsAsync(recipients.Select(r => r.Email));
+                // Add the owner's ID to the allowed list
+                var owner = await _graphClient.Users[userId]
+                    .Request()
+                    .Select("id")
+                    .GetAsync();
+                if (!string.IsNullOrWhiteSpace(owner.Id))
+                {
+                    allowedUserIds.Add(owner.Id);
+                }
                 await RemoveUnwantedPermissions(createdFolder.Id, allowedUserIds);
             }
+
+            // Now add the new permissions
+            var inviteRoles = new List<string> { role };
+            await SendInviteAsync(createdFolder.Id, recipients, inviteRoles, request.Message);
 
             return Ok(new
             {
@@ -299,6 +334,61 @@ public class GraphController : ControllerBase
         catch (ServiceException ex)
         {
             return HandleGraphException(ex, "POST /graph/users/drive/root/folders/secure");
+        }
+    }
+
+    [HttpPost("users/drive/items/{itemId}/permissions")]
+    public async Task<IActionResult> AddFolderPermissions(
+        string itemId,
+        [FromBody] AddPermissionsRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(itemId))
+        {
+            return BadRequest(new { message = "itemId is required." });
+        }
+
+        if (request == null)
+        {
+            return BadRequest(new { message = "Request body is required." });
+        }
+
+        if (request.Recipients == null || request.Recipients.Count == 0)
+        {
+            return BadRequest(new { message = "At least one recipient is required." });
+        }
+
+        var role = string.IsNullOrWhiteSpace(request.Role) ? "read" : request.Role.Trim();
+        if (!AllowedRoles.Contains(role))
+        {
+            return BadRequest(new { message = "Role must be 'read' or 'write'." });
+        }
+
+        try
+        {
+            var recipients = request.Recipients
+                .Where(email => !string.IsNullOrWhiteSpace(email))
+                .Select(email => new DriveRecipient { Email = email.Trim() })
+                .ToList();
+
+            if (recipients.Count == 0)
+            {
+                return BadRequest(new { message = "At least one valid recipient email is required." });
+            }
+
+            var inviteRoles = new List<string> { role };
+            await SendInviteAsync(itemId, recipients, inviteRoles, request.Message);
+
+            return Ok(new
+            {
+                message = "Permissions added successfully",
+                itemId,
+                recipientsCount = recipients.Count,
+                role
+            });
+        }
+        catch (ServiceException ex)
+        {
+            return HandleGraphException(ex, "POST /graph/users/drive/items/{itemId}/permissions");
         }
     }
 
@@ -327,14 +417,15 @@ public class GraphController : ControllerBase
         var requestUrl = $"{_graphClient.BaseUrl}/users/{userId}/drive/items/{itemId}/invite";
         var inviteRequest = new BaseRequest(requestUrl, _graphClient, null)
         {
-            Method = "POST"
+            Method = Microsoft.Graph.HttpMethods.POST,
+            ContentType = "application/json"
         };
 
         var payload = new
         {
             recipients = recipients.Select(r => new { email = r.Email }).ToList(),
             requireSignIn = true,
-            sendInvitation = false,
+            sendInvitation = true,
             roles = roles.ToList(),
             message
         };
@@ -356,7 +447,7 @@ public class GraphController : ControllerBase
                 continue;
             }
 
-            var grantedUserId = permission.GrantedTo?.User?.Id;
+            var grantedUserId = permission.GrantedToV2?.User?.Id ?? permission.GrantedTo?.User?.Id;
 
             if (string.IsNullOrWhiteSpace(grantedUserId) || !allowedUserIds.Contains(grantedUserId))
             {
@@ -396,6 +487,13 @@ public class GraphController : ControllerBase
         public List<string> Recipients { get; set; } = new();
         public string? Role { get; set; }
         public bool RemoveExistingPermissions { get; set; } = true;
+        public string? Message { get; set; }
+    }
+
+    public class AddPermissionsRequest
+    {
+        public List<string> Recipients { get; set; } = new();
+        public string? Role { get; set; }
         public string? Message { get; set; }
     }
 }
