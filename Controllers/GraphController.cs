@@ -41,6 +41,8 @@ public class GraphController : ControllerBase
   
 
     [HttpGet("users")]
+    /// <summary>Gets basic user info for the configured userId.</summary>
+    /// <remarks>No parameters.</remarks>
     public async Task<IActionResult> GetUser()
     {
         try
@@ -67,6 +69,8 @@ public class GraphController : ControllerBase
     
 
     [HttpGet("users/drive/root")]
+    /// <summary>Gets the root drive for the configured userId.</summary>
+    /// <remarks>No parameters.</remarks>
     public async Task<IActionResult> GetUserDriveRoot()
     {
         try
@@ -90,6 +94,8 @@ public class GraphController : ControllerBase
     }
 
     [HttpGet("users/drive/root/folders")]
+    /// <summary>Lists folders under the user's drive root.</summary>
+    /// <remarks>No parameters.</remarks>
     public async Task<IActionResult> GetUserDriveRootFolders()
     {
         try
@@ -117,6 +123,8 @@ public class GraphController : ControllerBase
     }
 
     [HttpPost("users/drive/root/folders")]
+    /// <summary>Creates a folder under the user's drive root.</summary>
+    /// <param name="folderName">Query parameter. Required.</param>
     public async Task<IActionResult> CreateUserDriveRootFolder([FromQuery] string folderName)
     {
         if (string.IsNullOrWhiteSpace(folderName))
@@ -155,6 +163,10 @@ public class GraphController : ControllerBase
 
     [HttpPost("users/drive/root/folders/upload")]
     [RequestSizeLimit(50 * 1024 * 1024)]
+    /// <summary>Uploads a file to a folder path under the user's drive root.</summary>
+    /// <param name="folderPath">Query parameter. Required.</param>
+    /// <param name="file">Form file. Required.</param>
+    /// <remarks>Limits: Max 50 MB; allowed extensions are doc, docx, xls, xlsx, pdf, eml, msg.</remarks>
     public async Task<IActionResult> UploadFileToFolder([FromQuery] string folderPath, IFormFile file)
     {
         if (string.IsNullOrWhiteSpace(folderPath))
@@ -211,6 +223,9 @@ public class GraphController : ControllerBase
     }
 
     [HttpPost("users/drive/root/folders/secure")]
+    /// <summary>Creates a folder (or uses existing) and applies sharing permissions.</summary>
+    /// <param name="request">Body. FolderName required, FolderPath optional, Recipients required, Role optional (default "read"),
+    /// RemoveExistingPermissions optional (default true), Message optional.</param>
     public async Task<IActionResult> 
         CreateSecureFolder([FromBody] SecureFolderRequest request)
     {
@@ -338,6 +353,9 @@ public class GraphController : ControllerBase
     }
 
     [HttpPost("users/drive/items/{itemId}/permissions")]
+    /// <summary>Adds sharing permissions to an existing drive item.</summary>
+    /// <param name="itemId">Route parameter. Required.</param>
+    /// <param name="request">Body. Recipients required, Role optional (default "read"), Message optional.</param>
     public async Task<IActionResult> AddFolderPermissions(
         string itemId,
         [FromBody] AddPermissionsRequest request)
@@ -389,6 +407,105 @@ public class GraphController : ControllerBase
         catch (ServiceException ex)
         {
             return HandleGraphException(ex, "POST /graph/users/drive/items/{itemId}/permissions");
+        }
+    }
+
+    [HttpGet("users/drive/items/download")]
+    /// <summary>Searches by name and downloads the first match. If the match is a folder, returns a zip.</summary>
+    /// <param name="q">Query parameter. Required.</param>
+    /// <remarks>No defaults; search uses Microsoft Graph search semantics.</remarks>
+    public async Task<IActionResult> DownloadDriveItem([FromQuery] string q)
+    {
+        if (string.IsNullOrWhiteSpace(q))
+        {
+            return BadRequest(new { message = "q query parameter is required." });
+        }
+
+        try
+        {
+            var results = await _graphClient.Users[userId].Drive.Root
+                .Search(q)
+                .Request()
+                .Select("id,name,webUrl,file,folder,parentReference,remoteItem")
+                .GetAsync();
+
+            var firstMatch = results.CurrentPage.FirstOrDefault();
+            if (firstMatch == null)
+            {
+                return NotFound(new { message = "No matching item found for the provided query." });
+            }
+
+            var effectiveItemId = firstMatch.RemoteItem?.Id ?? firstMatch.Id;
+            var effectiveParent = firstMatch.RemoteItem?.ParentReference ?? firstMatch.ParentReference;
+            var driveId = effectiveParent?.DriveId;
+            var driveItems = string.IsNullOrWhiteSpace(driveId)
+                ? _graphClient.Users[userId].Drive.Items
+                : _graphClient.Drives[driveId].Items;
+
+            var driveItem = await driveItems[effectiveItemId]
+                .Request()
+                .Select("id,name,file,folder")
+                .GetAsync();
+
+            if (driveItem.Folder != null)
+            {
+                var options = new List<Option> { new QueryOption("format", "zip") };
+                var zipStream = await driveItems[effectiveItemId]
+                    .Content
+                    .Request(options)
+                    .GetAsync();
+
+                return File(zipStream, "application/zip", $"{driveItem.Name}.zip");
+            }
+
+            var contentStream = await driveItems[effectiveItemId]
+                .Content
+                .Request()
+                .GetAsync();
+
+            var contentType = driveItem.File?.MimeType ?? "application/octet-stream";
+
+            return File(contentStream, contentType, driveItem.Name);
+        }
+        catch (ServiceException ex)
+        {
+            return HandleGraphException(ex, "GET /graph/users/drive/items/download?q=");
+        }
+    }
+
+    [HttpGet("users/drive/search")]
+    /// <summary>Searches the user's drive and returns matching file item IDs.</summary>
+    /// <param name="q">Query parameter. Required.</param>
+    /// <remarks>No defaults; search uses Microsoft Graph search semantics.</remarks>
+    public async Task<IActionResult> SearchDriveItems([FromQuery] string q)
+    {
+        if (string.IsNullOrWhiteSpace(q))
+        {
+            return BadRequest(new { message = "q query parameter is required." });
+        }
+
+        try
+        {
+            var results = await _graphClient.Users[userId].Drive.Root
+                .Search(q)
+                .Request()
+                .Select("id,name,webUrl,file,folder")
+                .GetAsync();
+
+            var items = results.CurrentPage
+                .Where(item => item.File != null)
+                .Select(item => new
+                {
+                    item.Id,
+                    item.Name,
+                    item.WebUrl
+                });
+
+            return Ok(items);
+        }
+        catch (ServiceException ex)
+        {
+            return HandleGraphException(ex, "GET /graph/users/drive/search?q=");
         }
     }
 
