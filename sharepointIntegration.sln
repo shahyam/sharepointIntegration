@@ -7,7 +7,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "sharepointIntegration", "sh
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{0AB3BF05-4346-4AA6-1389-037BE0695223}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "sharepointIntegration.Tests", "tests\sharepointIntegration.Tests\sharepointIntegration.Tests.csproj", "{0652DBA9-58BD-409A-8E6E-8874AA224AA4}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "sharepointIntegration.Tests", "..\tests\sharepointIntegration.Tests\sharepointIntegration.Tests.csproj", "{0652DBA9-58BD-409A-8E6E-8874AA224AA4}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
