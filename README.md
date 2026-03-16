@@ -20,10 +20,17 @@ Update the `Graph` section in `appsettings.json` or `appsettings.Development.jso
     "TenantId": "your-tenant-id",
     "ClientId": "your-client-id",
     "ClientSecret": "your-client-secret",
-    "Scopes": ["https://graph.microsoft.com/.default"]
+    "Scopes": ["https://graph.microsoft.com/.default"],
+    "ProxyUrl": "http://proxy.mycorp.local:8080",
+    "ProxyUsername": "",
+    "ProxyPassword": "",
+    "ProxyDomain": "",
+    "ProxyUseDefaultCredentials": false
   }
 }
 ```
+
+If you do not need a proxy, leave the proxy fields empty and `ProxyUseDefaultCredentials` set to `false`.
 
 ## Azure App Registration Steps
 
@@ -110,6 +117,25 @@ Drive endpoints require SharePoint Online licensing:
     - `role` (optional): "read" or "write" (defaults to "read")
     - `message` (optional): Custom message
 
+### SharePoint Site Operations (SharePointController)
+
+The SharePoint endpoints work against a single site id configured in the controller.
+Update the `_siteId` value in [Controllers/SharePointController.cs](Controllers/SharePointController.cs) before running.
+
+- **GET** `/sharepoint/sites/drive/root` - Get the site's default document library root
+- **GET** `/sharepoint/sites/drive/root/folders` - List folders in the root
+- **POST** `/sharepoint/sites/drive/root/folders?folderName={name}` - Create a folder in the root
+- **POST** `/sharepoint/sites/drive/root/folders/upload?folderPath={path}` - Upload a file to a folder path
+- **POST** `/sharepoint/sites/drive/root/folders/secure` - Create a folder and apply restricted permissions
+- **POST** `/sharepoint/sites/drive/items/{itemId}/permissions` - Add permissions to an item
+- **GET** `/sharepoint/sites/drive/items/download?q={name}` - Search by name and download first match
+- **GET** `/sharepoint/sites/drive/search?q={name}` - Search for matching file items
+
+### Resolve Site Id
+
+- **GET** `/sharepoint/sites/resolve?siteHost={host}&siteName={name}` - Resolve a site id using hostname and site name
+  - Example: `siteHost=contoso.sharepoint.com`, `siteName=MyTeamSite`
+
 ## How Secure Folder Works
 
 The secure folder endpoint (`POST /graph/users/drive/root/folders/secure`) provides advanced permission management:
@@ -131,8 +157,8 @@ The secure folder endpoint (`POST /graph/users/drive/root/folders/secure`) provi
 3. **Grant New Permissions**
    - Sends invitations to all specified recipients
    - Grants either "read" or "write" access based on the role parameter
-   - Uses Microsoft Graph's invite API to properly set permissions
-   - Does not send email notifications (`sendInvitation: false`)
+  - Uses Microsoft Graph's invite API to properly set permissions
+  - Sends email notifications (`sendInvitation: true`)
 
 ### Permission Levels
 
@@ -196,6 +222,14 @@ dotnet run
 ```
 
 The API will be available at `https://localhost:5001` or `http://localhost:5000`.
+
+## Tests
+
+An xUnit test project is available under `tests/sharepointIntegration.Tests` with basic controller validation tests.
+
+```bash
+dotnet test tests/sharepointIntegration.Tests/sharepointIntegration.Tests.csproj
+```
 
 ## Notes
 

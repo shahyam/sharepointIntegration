@@ -1,5 +1,6 @@
 <Solution>
-  <Project Path="sharepointIntegration.csproj" Type="C#" />
+  <Project Path="../tests/sharepointIntegration.Tests/sharepointIntegration.Tests.csproj" />
+  <Project Path="sharepointIntegration.csproj" />
   <Properties>
     <Property Name="Configuration">
       <Value>Debug</Value>

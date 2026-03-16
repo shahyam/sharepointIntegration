@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Http;
 using System.Reflection;
 using Microsoft.Extensions.Options;
 using MSGraph = Microsoft.Graph;
@@ -39,10 +41,53 @@ builder.Services.AddSingleton<MSGraph.GraphServiceClient>(serviceProvider =>
         throw new InvalidOperationException("Graph configuration is missing. Ensure Graph:TenantId, Graph:ClientId, and Graph:ClientSecret are set.");
     }
 
+    var handler = new HttpClientHandler
+    {
+        UseProxy = false
+    };
+
+    if (!string.IsNullOrWhiteSpace(graphOptions.ProxyUrl) || graphOptions.ProxyUseDefaultCredentials)
+    {
+        IWebProxy? proxy = null;
+        if (!string.IsNullOrWhiteSpace(graphOptions.ProxyUrl))
+        {
+            proxy = new WebProxy(graphOptions.ProxyUrl);
+
+            if (!string.IsNullOrWhiteSpace(graphOptions.ProxyUsername))
+            {
+                proxy.Credentials = new NetworkCredential(
+                    graphOptions.ProxyUsername,
+                    graphOptions.ProxyPassword,
+                    graphOptions.ProxyDomain);
+            }
+            else if (graphOptions.ProxyUseDefaultCredentials)
+            {
+                proxy.Credentials = CredentialCache.DefaultNetworkCredentials;
+            }
+        }
+        else
+        {
+            proxy = WebRequest.DefaultWebProxy;
+            if (graphOptions.ProxyUseDefaultCredentials)
+            {
+                proxy.Credentials = CredentialCache.DefaultNetworkCredentials;
+            }
+        }
+
+        if (proxy != null)
+        {
+            handler.UseProxy = true;
+            handler.Proxy = proxy;
+        }
+    }
+
+    var msalHttpClient = new HttpClient(handler, disposeHandler: false);
+
     var confidentialClient = ConfidentialClientApplicationBuilder
         .Create(graphOptions.ClientId)
         .WithTenantId(graphOptions.TenantId)
         .WithClientSecret(graphOptions.ClientSecret)
+        .WithHttpClientFactory(new MsalHttpClientFactory(msalHttpClient))
         .Build();
 
     var scopes = graphOptions.Scopes?.Length > 0
@@ -50,7 +95,8 @@ builder.Services.AddSingleton<MSGraph.GraphServiceClient>(serviceProvider =>
         : new[] { "https://graph.microsoft.com/.default" };
 
     var authProvider = new GraphAuthProvider(confidentialClient, scopes);
-    return new MSGraph.GraphServiceClient(authProvider);
+    var httpProvider = new MSGraph.HttpProvider(handler, disposeHandler: false);
+    return new MSGraph.GraphServiceClient(authProvider, httpProvider);
 });
 
 var app = builder.Build();
@@ -70,3 +116,7 @@ app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
+
+public partial class Program
+{
+}

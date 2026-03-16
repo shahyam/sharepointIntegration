@@ -9,11 +9,11 @@ namespace sharepointIntegration.Controllers;
 
 [ApiController]
 [Route("[controller]")]
-public class GraphController : ControllerBase
+public class SharePointController : ControllerBase
 {
     private readonly GraphServiceClient _graphClient;
-    private readonly ILogger<GraphController> _logger;
-    private readonly string userId = "shyamendrashah@zirconsam.onmicrosoft.com";
+    private readonly ILogger<SharePointController> _logger;
+    private readonly string _siteId = "YOUR_SITE_ID";
     private static readonly long MaxUploadBytes = 50 * 1024 * 1024;
     private static readonly HashSet<string> AllowedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -31,51 +31,55 @@ public class GraphController : ControllerBase
         "write"
     };
 
-    public GraphController(GraphServiceClient graphClient, ILogger<GraphController> logger)
+    public SharePointController(GraphServiceClient graphClient, ILogger<SharePointController> logger)
     {
         _graphClient = graphClient;
         _logger = logger;
     }
 
-  
-  
-
-    [HttpGet("users")]
-    /// <summary>Gets basic user info for the configured userId.</summary>
-    /// <remarks>No parameters.</remarks>
-    public async Task<IActionResult> GetUser()
+    [HttpGet("sites/resolve")]
+    /// <summary>Resolves a site id using the SharePoint hostname and site name.</summary>
+    public async Task<IActionResult> ResolveSiteId([FromQuery] string siteHost, [FromQuery] string siteName)
     {
+        if (string.IsNullOrWhiteSpace(siteHost))
+        {
+            return BadRequest(new { message = "siteHost query parameter is required." });
+        }
+
+        if (string.IsNullOrWhiteSpace(siteName))
+        {
+            return BadRequest(new { message = "siteName query parameter is required." });
+        }
+
         try
         {
-            var user = await _graphClient.Users[userId]
+            var sitePath = $"/sites/{siteName.Trim('/')}";
+            var site = await _graphClient.Sites[siteHost]
+                .SiteWithPath(sitePath)
                 .Request()
-                .Select("id,displayName,userPrincipalName")
+                .Select("id,displayName,webUrl")
                 .GetAsync();
 
             return Ok(new
             {
-                user.Id,
-                user.DisplayName,
-                user.UserPrincipalName
+                site.Id,
+                site.DisplayName,
+                site.WebUrl
             });
         }
         catch (ServiceException ex)
         {
-            return HandleGraphException(ex, "GET /graph/users/{userId}");
+            return HandleGraphException(ex, "GET /sharepoint/sites/resolve?siteHost=&siteName=");
         }
     }
 
-
-    
-
-    [HttpGet("users/drive/root")]
-    /// <summary>Gets the root drive for the configured userId.</summary>
-    /// <remarks>No parameters.</remarks>
-    public async Task<IActionResult> GetUserDriveRoot()
+    [HttpGet("sites/drive/root")]
+    /// <summary>Gets the root drive for the given SharePoint site.</summary>
+    public async Task<IActionResult> GetSiteDriveRoot()
     {
         try
         {
-            var driveRoot = await _graphClient.Users[userId].Drive.Root
+            var driveRoot = await _graphClient.Sites[_siteId].Drive.Root
                 .Request()
                 .Select("id,name,webUrl")
                 .GetAsync();
@@ -89,18 +93,17 @@ public class GraphController : ControllerBase
         }
         catch (ServiceException ex)
         {
-            return HandleGraphException(ex, "GET /graph/users/{userId}/drive/root");
+            return HandleGraphException(ex, "GET /sharepoint/sites/drive/root");
         }
     }
 
-    [HttpGet("users/drive/root/folders")]
-    /// <summary>Lists folders under the user's drive root.</summary>
-    /// <remarks>No parameters.</remarks>
-    public async Task<IActionResult> GetUserDriveRootFolders()
+    [HttpGet("sites/drive/root/folders")]
+    /// <summary>Lists folders under the site's document library root.</summary>
+    public async Task<IActionResult> GetSiteRootFolders()
     {
         try
         {
-            var items = await _graphClient.Users[userId].Drive.Root.Children
+            var items = await _graphClient.Sites[_siteId].Drive.Root.Children
                 .Request()
                 .Select("id,name,webUrl,folder")
                 .GetAsync();
@@ -118,14 +121,13 @@ public class GraphController : ControllerBase
         }
         catch (ServiceException ex)
         {
-            return HandleGraphException(ex, "GET /graph/users/drive/root/folders");
+            return HandleGraphException(ex, "GET /sharepoint/sites/drive/root/folders");
         }
     }
 
-    [HttpPost("users/drive/root/folders")]
-    /// <summary>Creates a folder under the user's drive root.</summary>
-    /// <param name="folderName">Query parameter. Required.</param>
-    public async Task<IActionResult> CreateUserDriveRootFolder([FromQuery] string folderName)
+    [HttpPost("sites/drive/root/folders")]
+    /// <summary>Creates a folder under the site's document library root.</summary>
+    public async Task<IActionResult> CreateSiteRootFolder([FromQuery] string folderName)
     {
         if (string.IsNullOrWhiteSpace(folderName))
         {
@@ -144,7 +146,7 @@ public class GraphController : ControllerBase
                 }
             };
 
-            var createdFolder = await _graphClient.Users[userId].Drive.Root.Children
+            var createdFolder = await _graphClient.Sites[_siteId].Drive.Root.Children
                 .Request()
                 .AddAsync(driveItem);
 
@@ -157,17 +159,14 @@ public class GraphController : ControllerBase
         }
         catch (ServiceException ex)
         {
-            return HandleGraphException(ex, "POST /graph/users/drive/root/folders?folderName=");
+            return HandleGraphException(ex, "POST /sharepoint/sites/drive/root/folders?folderName=");
         }
     }
 
-    [HttpPost("users/drive/root/folders/upload")]
+    [HttpPost("sites/drive/root/folders/upload")]
     [RequestSizeLimit(50 * 1024 * 1024)]
-    /// <summary>Uploads a file to a folder path under the user's drive root.</summary>
-    /// <param name="folderPath">Query parameter. Required.</param>
-    /// <param name="file">Form file. Required.</param>
-    /// <remarks>Limits: Max 50 MB; allowed extensions are doc, docx, xls, xlsx, pdf, eml, msg.</remarks>
-    public async Task<IActionResult> UploadFileToFolder([FromQuery] string folderPath, IFormFile file)
+    /// <summary>Uploads a file to a folder path under the site's document library root.</summary>
+    public async Task<IActionResult> UploadFileToSiteFolder([FromQuery] string folderPath, IFormFile file)
     {
         if (string.IsNullOrWhiteSpace(folderPath))
         {
@@ -202,7 +201,7 @@ public class GraphController : ControllerBase
                 : $"{trimmedFolderPath}/{file.FileName}";
 
             await using var stream = file.OpenReadStream();
-            var uploadedItem = await _graphClient.Users[userId].Drive.Root
+            var uploadedItem = await _graphClient.Sites[_siteId].Drive.Root
                 .ItemWithPath(targetPath)
                 .Content
                 .Request()
@@ -218,20 +217,16 @@ public class GraphController : ControllerBase
         }
         catch (ServiceException ex)
         {
-            return HandleGraphException(ex, "POST /graph/users/drive/root/folders/upload?folderPath=");
+            return HandleGraphException(ex, "POST /sharepoint/sites/drive/root/folders/upload?folderPath=");
         }
     }
 
-    [HttpPost("users/drive/root/folders/secure")]
+    [HttpPost("sites/drive/root/folders/secure")]
     /// <summary>Creates a folder (or uses existing) and applies sharing permissions.</summary>
-    /// <param name="request">Body. FolderName required, FolderPath optional, Recipients required, Role optional (default "read"),
-    /// RemoveExistingPermissions optional (default true), Message optional.</param>
-    public async Task<IActionResult> 
-        CreateSecureFolder([FromBody] SecureFolderRequest request)
+    public async Task<IActionResult> CreateSecureSiteFolder([FromBody] SecureFolderRequest request)
     {
         if (request == null)
         {
-
             return BadRequest(new { message = "Request body is required." });
         }
 
@@ -258,28 +253,24 @@ public class GraphController : ControllerBase
                 ? request.FolderName
                 : $"{trimmedFolderPath}/{request.FolderName}";
 
-            // Check if folder already exists
             DriveItem? createdFolder = null;
             try
             {
-                createdFolder = await _graphClient.Users[userId].Drive.Root
+                createdFolder = await _graphClient.Sites[_siteId].Drive.Root
                     .ItemWithPath(targetPath)
                     .Request()
                     .GetAsync();
-                
-                // If folder doesn't exist or is not a folder, we'll create it
+
                 if (createdFolder?.Folder == null)
                 {
                     createdFolder = null;
                 }
             }
-            catch (ServiceException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+            catch (ServiceException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
             {
-                // Folder doesn't exist, we'll create it below
                 createdFolder = null;
             }
 
-            // Create folder only if it doesn't exist
             if (createdFolder == null)
             {
                 var driveItem = new DriveItem
@@ -294,14 +285,14 @@ public class GraphController : ControllerBase
 
                 if (string.IsNullOrWhiteSpace(trimmedFolderPath))
                 {
-                    createdFolder = await _graphClient.Users[userId].Drive.Root
+                    createdFolder = await _graphClient.Sites[_siteId].Drive.Root
                         .Children
                         .Request()
                         .AddAsync(driveItem);
                 }
                 else
                 {
-                    createdFolder = await _graphClient.Users[userId].Drive.Root
+                    createdFolder = await _graphClient.Sites[_siteId].Drive.Root
                         .ItemWithPath(trimmedFolderPath)
                         .Children
                         .Request()
@@ -319,25 +310,16 @@ public class GraphController : ControllerBase
                 return BadRequest(new { message = "At least one valid recipient email is required." });
             }
 
-            // Remove unwanted permissions BEFORE adding new ones
             if (request.RemoveExistingPermissions)
             {
                 var allowedUserIds = await ResolveRecipientIdsAsync(recipients.Select(r => r.Email));
-                // Add the owner's ID to the allowed list
-                var owner = await _graphClient.Users[userId]
-                    .Request()
-                    .Select("id")
-                    .GetAsync();
-                if (!string.IsNullOrWhiteSpace(owner.Id))
-                {
-                    allowedUserIds.Add(owner.Id);
-                }
-                await RemoveUnwantedPermissions(createdFolder.Id, allowedUserIds);
+                var driveId = await GetSiteDriveIdAsync();
+                await RemoveUnwantedPermissions(driveId, createdFolder.Id, allowedUserIds);
             }
 
-            // Now add the new permissions
             var inviteRoles = new List<string> { role };
-            await SendInviteAsync(createdFolder.Id, recipients, inviteRoles, request.Message);
+            var inviteDriveId = await GetSiteDriveIdAsync();
+            await SendInviteAsync(inviteDriveId, createdFolder.Id, recipients, inviteRoles, request.Message);
 
             return Ok(new
             {
@@ -348,15 +330,13 @@ public class GraphController : ControllerBase
         }
         catch (ServiceException ex)
         {
-            return HandleGraphException(ex, "POST /graph/users/drive/root/folders/secure");
+            return HandleGraphException(ex, "POST /sharepoint/sites/drive/root/folders/secure");
         }
     }
 
-    [HttpPost("users/drive/items/{itemId}/permissions")]
+    [HttpPost("sites/drive/items/{itemId}/permissions")]
     /// <summary>Adds sharing permissions to an existing drive item.</summary>
-    /// <param name="itemId">Route parameter. Required.</param>
-    /// <param name="request">Body. Recipients required, Role optional (default "read"), Message optional.</param>
-    public async Task<IActionResult> AddFolderPermissions(
+    public async Task<IActionResult> AddSiteItemPermissions(
         string itemId,
         [FromBody] AddPermissionsRequest request)
     {
@@ -394,7 +374,8 @@ public class GraphController : ControllerBase
             }
 
             var inviteRoles = new List<string> { role };
-            await SendInviteAsync(itemId, recipients, inviteRoles, request.Message);
+            var driveId = await GetSiteDriveIdAsync();
+            await SendInviteAsync(driveId, itemId, recipients, inviteRoles, request.Message);
 
             return Ok(new
             {
@@ -406,16 +387,13 @@ public class GraphController : ControllerBase
         }
         catch (ServiceException ex)
         {
-            return HandleGraphException(ex, "POST /graph/users/drive/items/{itemId}/permissions");
+            return HandleGraphException(ex, "POST /sharepoint/sites/drive/items/{itemId}/permissions");
         }
     }
 
-    [HttpGet("users/drive/items/download")]
-    /// <summary>Searches by name and downloads the first match. If the match is
-    ///  a folder, returns a zip.</summary>
-    /// <param name="q">Query parameter. Required.</param>
-    /// <remarks>No defaults; search uses Microsoft Graph search semantics.</remarks>
-    public async Task<IActionResult> DownloadDriveItem([FromQuery] string q)
+    [HttpGet("sites/drive/items/download")]
+    /// <summary>Searches by name and downloads the first match. If the match is a folder, returns a zip.</summary>
+    public async Task<IActionResult> DownloadSiteItem([FromQuery] string q)
     {
         if (string.IsNullOrWhiteSpace(q))
         {
@@ -424,7 +402,7 @@ public class GraphController : ControllerBase
 
         try
         {
-            var results = await _graphClient.Users[userId].Drive.Root
+            var results = await _graphClient.Sites[_siteId].Drive.Root
                 .Search(q)
                 .Request()
                 .Select("id,name,webUrl,file,folder,parentReference,remoteItem")
@@ -438,10 +416,8 @@ public class GraphController : ControllerBase
 
             var effectiveItemId = firstMatch.RemoteItem?.Id ?? firstMatch.Id;
             var effectiveParent = firstMatch.RemoteItem?.ParentReference ?? firstMatch.ParentReference;
-            var driveId = effectiveParent?.DriveId;
-            var driveItems = string.IsNullOrWhiteSpace(driveId)
-                ? _graphClient.Users[userId].Drive.Items
-                : _graphClient.Drives[driveId].Items;
+            var driveId = effectiveParent?.DriveId ?? await GetSiteDriveIdAsync();
+            var driveItems = _graphClient.Drives[driveId].Items;
 
             var driveItem = await driveItems[effectiveItemId]
                 .Request()
@@ -470,15 +446,13 @@ public class GraphController : ControllerBase
         }
         catch (ServiceException ex)
         {
-            return HandleGraphException(ex, "GET /graph/users/drive/items/download?q=");
+            return HandleGraphException(ex, "GET /sharepoint/sites/drive/items/download?q=");
         }
     }
 
-    [HttpGet("users/drive/search")]
-    /// <summary>Searches the user's drive and returns matching file item IDs.</summary>
-    /// <param name="q">Query parameter. Required.</param>
-    /// <remarks>No defaults; search uses Microsoft Graph search semantics.</remarks>
-    public async Task<IActionResult> SearchDriveItems([FromQuery] string q)
+    [HttpGet("sites/drive/search")]
+    /// <summary>Searches the site's document library and returns matching file item IDs.</summary>
+    public async Task<IActionResult> SearchSiteDriveItems([FromQuery] string q)
     {
         if (string.IsNullOrWhiteSpace(q))
         {
@@ -487,7 +461,7 @@ public class GraphController : ControllerBase
 
         try
         {
-            var results = await _graphClient.Users[userId].Drive.Root
+            var results = await _graphClient.Sites[_siteId].Drive.Root
                 .Search(q)
                 .Request()
                 .Select("id,name,webUrl,file,folder")
@@ -506,8 +480,23 @@ public class GraphController : ControllerBase
         }
         catch (ServiceException ex)
         {
-            return HandleGraphException(ex, "GET /graph/users/drive/search?q=");
+            return HandleGraphException(ex, "GET /sharepoint/sites/drive/search?q=");
         }
+    }
+
+    private async Task<string> GetSiteDriveIdAsync()
+    {
+        var drive = await _graphClient.Sites[_siteId].Drive
+            .Request()
+            .Select("id")
+            .GetAsync();
+
+        if (string.IsNullOrWhiteSpace(drive.Id))
+        {
+            throw new InvalidOperationException("Site drive id not found.");
+        }
+
+        return drive.Id;
     }
 
     private async Task<HashSet<string>> ResolveRecipientIdsAsync(IEnumerable<string?> emails)
@@ -530,9 +519,9 @@ public class GraphController : ControllerBase
         return ids;
     }
 
-    private async Task SendInviteAsync(string itemId, IEnumerable<DriveRecipient> recipients, IEnumerable<string> roles, string? message)
+    private async Task SendInviteAsync(string driveId, string itemId, IEnumerable<DriveRecipient> recipients, IEnumerable<string> roles, string? message)
     {
-        var requestUrl = $"{_graphClient.BaseUrl}/users/{userId}/drive/items/{itemId}/invite";
+        var requestUrl = $"{_graphClient.BaseUrl}/drives/{driveId}/items/{itemId}/invite";
         var inviteRequest = new BaseRequest(requestUrl, _graphClient, null)
         {
             Method = Microsoft.Graph.HttpMethods.POST,
@@ -551,9 +540,9 @@ public class GraphController : ControllerBase
         await inviteRequest.SendAsync<Permission>(payload, CancellationToken.None, HttpCompletionOption.ResponseContentRead);
     }
 
-    private async Task RemoveUnwantedPermissions(string itemId, HashSet<string> allowedUserIds)
+    private async Task RemoveUnwantedPermissions(string driveId, string itemId, HashSet<string> allowedUserIds)
     {
-        var permissions = await _graphClient.Users[userId].Drive.Items[itemId]
+        var permissions = await _graphClient.Drives[driveId].Items[itemId]
             .Permissions
             .Request()
             .GetAsync();
@@ -569,7 +558,7 @@ public class GraphController : ControllerBase
 
             if (string.IsNullOrWhiteSpace(grantedUserId) || !allowedUserIds.Contains(grantedUserId))
             {
-                await _graphClient.Users[userId].Drive.Items[itemId]
+                await _graphClient.Drives[driveId].Items[itemId]
                     .Permissions[permission.Id]
                     .Request()
                     .DeleteAsync();
@@ -577,7 +566,6 @@ public class GraphController : ControllerBase
         }
     }
 
-  
     private IActionResult HandleGraphException(ServiceException ex, string operation)
     {
         _logger.LogError(ex, "Graph request failed for {Operation}. Code: {Code}, Message: {Message}",
