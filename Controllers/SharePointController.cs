@@ -568,6 +568,174 @@ public class SharePointController : ControllerBase
         }
     }
 
+    [HttpPost("sites/drive/items/{itemId}/prevent-download")]
+    /// <summary>Prevents downloading of a specific file or folder by setting restrictive access permissions.</summary>
+    public async Task<IActionResult> PreventItemDownload(string itemId)
+    {
+        if (string.IsNullOrWhiteSpace(itemId))
+        {
+            return BadRequest(new { message = "itemId is required." });
+        }
+
+        try
+        {
+            var driveId = await GetSiteDriveIdAsync();
+            var restrictedCount = await PreventDownloadAsync(driveId, itemId);
+
+            return Ok(new
+            {
+                message = "Download prevention applied successfully",
+                itemId,
+                permissionsModified = restrictedCount
+            });
+        }
+        catch (ServiceException ex)
+        {
+            return HandleGraphException(ex, "POST /sharepoint/sites/drive/items/{itemId}/prevent-download");
+        }
+    }
+
+    [HttpPost("sites/drive/folders/prevent-download")]
+    /// <summary>Prevents downloading of all items in a folder and optionally recursively.</summary>
+    public async Task<IActionResult> PreventFolderDownload([FromBody] PreventDownloadRequest request)
+    {
+        if (request == null)
+        {
+            return BadRequest(new { message = "Request body is required." });
+        }
+
+        if (string.IsNullOrWhiteSpace(request.FolderPath))
+        {
+            return BadRequest(new { message = "FolderPath is required." });
+        }
+
+        try
+        {
+            var driveId = await GetSiteDriveIdAsync();
+
+            // Get the folder item
+            var trimmedFolderPath = request.FolderPath.Trim('/');
+            var folderItem = await _graphClient.Sites[_siteId].Drive.Root
+                .ItemWithPath(trimmedFolderPath)
+                .Request()
+                .Select("id,name,folder")
+                .GetAsync();
+
+            if (folderItem?.Folder == null)
+            {
+                return BadRequest(new { message = "The specified path is not a folder." });
+            }
+
+            int totalPermissionsModified = 0;
+
+            // Prevent download on the folder itself
+            totalPermissionsModified += await PreventDownloadAsync(driveId, folderItem.Id);
+
+            // If recursive, prevent download on all items within the folder
+            if (request.Recursive)
+            {
+                totalPermissionsModified += await PreventDownloadRecursiveAsync(driveId, folderItem.Id);
+            }
+
+            return Ok(new
+            {
+                message = "Download prevention applied successfully",
+                folderId = folderItem.Id,
+                folderName = folderItem.Name,
+                recursive = request.Recursive,
+                totalPermissionsModified
+            });
+        }
+        catch (ServiceException ex)
+        {
+            return HandleGraphException(ex, "POST /sharepoint/sites/drive/folders/prevent-download");
+        }
+    }
+
+    [HttpPost("sites/drive/items/{itemId}/restrict-actions")]
+    /// <summary>Restricts the More actions menu on an item by limiting available operations.</summary>
+    public async Task<IActionResult> RestrictItemActions(string itemId)
+    {
+        if (string.IsNullOrWhiteSpace(itemId))
+        {
+            return BadRequest(new { message = "itemId is required." });
+        }
+
+        try
+        {
+            var driveId = await GetSiteDriveIdAsync();
+            var restrictedActionsCount = await RestrictActionsAsync(driveId, itemId);
+
+            return Ok(new
+            {
+                message = "More actions menu restricted successfully",
+                itemId,
+                restrictionsApplied = restrictedActionsCount
+            });
+        }
+        catch (ServiceException ex)
+        {
+            return HandleGraphException(ex, "POST /sharepoint/sites/drive/items/{itemId}/restrict-actions");
+        }
+    }
+
+    [HttpPost("sites/drive/folders/restrict-actions")]
+    /// <summary>Restricts the More actions menu on a folder and optionally on all items within it recursively.</summary>
+    public async Task<IActionResult> RestrictFolderActions([FromBody] RestrictActionsRequest request)
+    {
+        if (request == null)
+        {
+            return BadRequest(new { message = "Request body is required." });
+        }
+
+        if (string.IsNullOrWhiteSpace(request.FolderPath))
+        {
+            return BadRequest(new { message = "FolderPath is required." });
+        }
+
+        try
+        {
+            var driveId = await GetSiteDriveIdAsync();
+
+            // Get the folder item
+            var trimmedFolderPath = request.FolderPath.Trim('/');
+            var folderItem = await _graphClient.Sites[_siteId].Drive.Root
+                .ItemWithPath(trimmedFolderPath)
+                .Request()
+                .Select("id,name,folder")
+                .GetAsync();
+
+            if (folderItem?.Folder == null)
+            {
+                return BadRequest(new { message = "The specified path is not a folder." });
+            }
+
+            int totalRestrictionsApplied = 0;
+
+            // Restrict actions on the folder itself
+            totalRestrictionsApplied += await RestrictActionsAsync(driveId, folderItem.Id);
+
+            // If recursive, restrict actions on all items within the folder
+            if (request.Recursive)
+            {
+                totalRestrictionsApplied += await RestrictActionsRecursiveAsync(driveId, folderItem.Id);
+            }
+
+            return Ok(new
+            {
+                message = "More actions menu restricted successfully",
+                folderId = folderItem.Id,
+                folderName = folderItem.Name,
+                recursive = request.Recursive,
+                totalRestrictionsApplied
+            });
+        }
+        catch (ServiceException ex)
+        {
+            return HandleGraphException(ex, "POST /sharepoint/sites/drive/folders/restrict-actions");
+        }
+    }
+
     private async Task<string> GetSiteDriveIdAsync()
     {
         var drive = await _graphClient.Sites[_siteId].Drive
@@ -680,6 +848,35 @@ public class SharePointController : ControllerBase
             }
         }
 
+        // Remove sharing links to hide the share icon
+        try
+        {
+            var sharingLinks = permissions.CurrentPage
+                .Where(p => p.Link != null)
+                .ToList();
+
+            foreach (var sharingLink in sharingLinks)
+            {
+                try
+                {
+                    await _graphClient.Drives[driveId].Items[itemId]
+                        .Permissions[sharingLink.Id]
+                        .Request()
+                        .DeleteAsync();
+                    removedCount++;
+                    _logger.LogInformation("Removed sharing link from item {ItemId}", itemId);
+                }
+                catch (ServiceException ex)
+                {
+                    _logger.LogWarning(ex, "Failed to remove sharing link {PermissionId} from item {ItemId}", sharingLink.Id, itemId);
+                }
+            }
+        }
+        catch (ServiceException ex)
+        {
+            _logger.LogWarning(ex, "Failed to retrieve sharing links for item {ItemId}", itemId);
+        }
+
         return removedCount;
     }
 
@@ -729,6 +926,233 @@ public class SharePointController : ControllerBase
         return totalRemoved;
     }
 
+    private async Task<int> PreventDownloadAsync(string driveId, string itemId)
+    {
+        int modifiedCount = 0;
+
+        try
+        {
+            // Get current permissions
+            var permissions = await _graphClient.Drives[driveId].Items[itemId]
+                .Permissions
+                .Request()
+                .GetAsync();
+
+            foreach (var permission in permissions.CurrentPage)
+            {
+                // Skip owner permissions
+                if (permission.Roles != null && permission.Roles.Contains("owner"))
+                {
+                    continue;
+                }
+
+                // Skip sharing links as they need to be deleted entirely
+                if (permission.Link != null)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    // Update permission to view-only (prevents downloads)
+                    var updatedPermission = new Permission
+                    {
+                        Roles = new List<string> { "view" }
+                    };
+
+                    await _graphClient.Drives[driveId].Items[itemId]
+                        .Permissions[permission.Id]
+                        .Request()
+                        .UpdateAsync(updatedPermission);
+
+                    modifiedCount++;
+                    _logger.LogInformation("Updated permission {PermissionId} to view-only for item {ItemId}", permission.Id, itemId);
+                }
+                catch (ServiceException ex)
+                {
+                    _logger.LogWarning(ex, "Failed to update permission {PermissionId} to view-only for item {ItemId}", permission.Id, itemId);
+                }
+            }
+
+            // Remove any sharing links to prevent downloads through sharing
+            var sharingLinks = permissions.CurrentPage
+                .Where(p => p.Link != null)
+                .ToList();
+
+            foreach (var sharingLink in sharingLinks)
+            {
+                try
+                {
+                    await _graphClient.Drives[driveId].Items[itemId]
+                        .Permissions[sharingLink.Id]
+                        .Request()
+                        .DeleteAsync();
+                    modifiedCount++;
+                    _logger.LogInformation("Removed sharing link from item {ItemId}", itemId);
+                }
+                catch (ServiceException ex)
+                {
+                    _logger.LogWarning(ex, "Failed to remove sharing link {PermissionId} from item {ItemId}", sharingLink.Id, itemId);
+                }
+            }
+        }
+        catch (ServiceException ex)
+        {
+            _logger.LogError(ex, "Error preventing download for item {ItemId}", itemId);
+        }
+
+        return modifiedCount;
+    }
+
+    private async Task<int> PreventDownloadRecursiveAsync(string driveId, string folderId)
+    {
+        int totalModified = 0;
+
+        try
+        {
+            var children = await _graphClient.Drives[driveId].Items[folderId].Children
+                .Request()
+                .Select("id,name,folder")
+                .GetAsync();
+
+            foreach (var child in children.CurrentPage)
+            {
+                // Prevent download on this child
+                totalModified += await PreventDownloadAsync(driveId, child.Id);
+
+                // If this child is a folder, recursively process its contents
+                if (child.Folder != null)
+                {
+                    totalModified += await PreventDownloadRecursiveAsync(driveId, child.Id);
+                }
+            }
+
+            // Get next page if it exists
+            while (children.NextPageRequest != null)
+            {
+                children = await children.NextPageRequest.GetAsync();
+                foreach (var child in children.CurrentPage)
+                {
+                    totalModified += await PreventDownloadAsync(driveId, child.Id);
+
+                    if (child.Folder != null)
+                    {
+                        totalModified += await PreventDownloadRecursiveAsync(driveId, child.Id);
+                    }
+                }
+            }
+        }
+        catch (ServiceException ex)
+        {
+            _logger.LogError(ex, "Error preventing downloads for folder {FolderId}", folderId);
+        }
+
+        return totalModified;
+    }
+
+    private async Task<int> RestrictActionsAsync(string driveId, string itemId)
+    {
+        int restrictionsApplied = 0;
+
+        try
+        {
+            // Get current permissions
+            var permissions = await _graphClient.Drives[driveId].Items[itemId]
+                .Permissions
+                .Request()
+                .GetAsync();
+
+            foreach (var permission in permissions.CurrentPage)
+            {
+                // Skip owner permissions - they need to retain full access
+                if (permission.Roles != null && permission.Roles.Contains("owner"))
+                {
+                    continue;
+                }
+
+                // Skip sharing links as they need to be removed entirely
+                if (permission.Link != null)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    // Update permission to view-only to restrict More actions menu
+                    // View-only prevents delete, rename, move, copy, and other modification operations
+                    var updatedPermission = new Permission
+                    {
+                        Roles = new List<string> { "view" }
+                    };
+
+                    await _graphClient.Drives[driveId].Items[itemId]
+                        .Permissions[permission.Id]
+                        .Request()
+                        .UpdateAsync(updatedPermission);
+
+                    restrictionsApplied++;
+                    _logger.LogInformation("Restricted actions for permission {PermissionId} on item {ItemId}", permission.Id, itemId);
+                }
+                catch (ServiceException ex)
+                {
+                    _logger.LogWarning(ex, "Failed to restrict actions for permission {PermissionId} on item {ItemId}", permission.Id, itemId);
+                }
+            }
+        }
+        catch (ServiceException ex)
+        {
+            _logger.LogError(ex, "Error restricting actions for item {ItemId}", itemId);
+        }
+
+        return restrictionsApplied;
+    }
+
+    private async Task<int> RestrictActionsRecursiveAsync(string driveId, string folderId)
+    {
+        int totalRestricted = 0;
+
+        try
+        {
+            var children = await _graphClient.Drives[driveId].Items[folderId].Children
+                .Request()
+                .Select("id,name,folder")
+                .GetAsync();
+
+            foreach (var child in children.CurrentPage)
+            {
+                // Restrict actions on this child
+                totalRestricted += await RestrictActionsAsync(driveId, child.Id);
+
+                // If this child is a folder, recursively process its contents
+                if (child.Folder != null)
+                {
+                    totalRestricted += await RestrictActionsRecursiveAsync(driveId, child.Id);
+                }
+            }
+
+            // Get next page if it exists
+            while (children.NextPageRequest != null)
+            {
+                children = await children.NextPageRequest.GetAsync();
+                foreach (var child in children.CurrentPage)
+                {
+                    totalRestricted += await RestrictActionsAsync(driveId, child.Id);
+
+                    if (child.Folder != null)
+                    {
+                        totalRestricted += await RestrictActionsRecursiveAsync(driveId, child.Id);
+                    }
+                }
+            }
+        }
+        catch (ServiceException ex)
+        {
+            _logger.LogError(ex, "Error restricting actions recursively for folder {FolderId}", folderId);
+        }
+
+        return totalRestricted;
+    }
+
     private IActionResult HandleGraphException(ServiceException ex, string operation)
     {
         _logger.LogError(ex, "Graph request failed for {Operation}. Code: {Code}, Message: {Message}",
@@ -768,6 +1192,18 @@ public class SharePointController : ControllerBase
     }
 
     public class DisableFolderSharingRequest
+    {
+        public string FolderPath { get; set; } = string.Empty;
+        public bool Recursive { get; set; } = false;
+    }
+
+    public class PreventDownloadRequest
+    {
+        public string FolderPath { get; set; } = string.Empty;
+        public bool Recursive { get; set; } = false;
+    }
+
+    public class RestrictActionsRequest
     {
         public string FolderPath { get; set; } = string.Empty;
         public bool Recursive { get; set; } = false;
