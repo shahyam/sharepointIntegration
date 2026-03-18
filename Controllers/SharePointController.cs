@@ -319,7 +319,7 @@ public class SharePointController : ControllerBase
 
             var inviteRoles = new List<string> { role };
             var inviteDriveId = await GetSiteDriveIdAsync();
-            await SendInviteAsync(inviteDriveId, createdFolder.Id, recipients, inviteRoles, request.Message);
+            await SendInviteAsync(inviteDriveId, createdFolder.Id, recipients, inviteRoles, request.Message, request.SendInvitation);
 
             return Ok(new
             {
@@ -484,6 +484,90 @@ public class SharePointController : ControllerBase
         }
     }
 
+    [HttpPost("sites/drive/items/{itemId}/disable-sharing")]
+    /// <summary>Disables all sharing on a specific file or folder by removing all non-owner permissions.</summary>
+    public async Task<IActionResult> DisableItemSharing(string itemId)
+    {
+        if (string.IsNullOrWhiteSpace(itemId))
+        {
+            return BadRequest(new { message = "itemId is required." });
+        }
+
+        try
+        {
+            var driveId = await GetSiteDriveIdAsync();
+            var removedPermissions = await DisableSharingAsync(driveId, itemId, removeOnlyNonOwnerPermissions: true);
+
+            return Ok(new
+            {
+                message = "Sharing disabled successfully",
+                itemId,
+                permissionsRemoved = removedPermissions
+            });
+        }
+        catch (ServiceException ex)
+        {
+            return HandleGraphException(ex, "POST /sharepoint/sites/drive/items/{itemId}/disable-sharing");
+        }
+    }
+
+    [HttpPost("sites/drive/folders/disable-sharing")]
+    /// <summary>Disables all sharing on a folder and optionally on all items within it recursively.</summary>
+    public async Task<IActionResult> DisableFolderSharing([FromBody] DisableFolderSharingRequest request)
+    {
+        if (request == null)
+        {
+            return BadRequest(new { message = "Request body is required." });
+        }
+
+        if (string.IsNullOrWhiteSpace(request.FolderPath))
+        {
+            return BadRequest(new { message = "FolderPath is required." });
+        }
+
+        try
+        {
+            var driveId = await GetSiteDriveIdAsync();
+
+            // Get the folder item
+            var trimmedFolderPath = request.FolderPath.Trim('/');
+            var folderItem = await _graphClient.Sites[_siteId].Drive.Root
+                .ItemWithPath(trimmedFolderPath)
+                .Request()
+                .Select("id,name,folder")
+                .GetAsync();
+
+            if (folderItem?.Folder == null)
+            {
+                return BadRequest(new { message = "The specified path is not a folder." });
+            }
+
+            int totalPermissionsRemoved = 0;
+
+            // Disable sharing on the folder itself
+            totalPermissionsRemoved += await DisableSharingAsync(driveId, folderItem.Id, removeOnlyNonOwnerPermissions: true);
+
+            // If recursive, disable sharing on all items within the folder
+            if (request.Recursive)
+            {
+                totalPermissionsRemoved += await DisableSharingRecursiveAsync(driveId, folderItem.Id);
+            }
+
+            return Ok(new
+            {
+                message = "Sharing disabled successfully",
+                folderId = folderItem.Id,
+                folderName = folderItem.Name,
+                recursive = request.Recursive,
+                totalPermissionsRemoved
+            });
+        }
+        catch (ServiceException ex)
+        {
+            return HandleGraphException(ex, "POST /sharepoint/sites/drive/folders/disable-sharing");
+        }
+    }
+
     private async Task<string> GetSiteDriveIdAsync()
     {
         var drive = await _graphClient.Sites[_siteId].Drive
@@ -519,7 +603,7 @@ public class SharePointController : ControllerBase
         return ids;
     }
 
-    private async Task SendInviteAsync(string driveId, string itemId, IEnumerable<DriveRecipient> recipients, IEnumerable<string> roles, string? message)
+    private async Task SendInviteAsync(string driveId, string itemId, IEnumerable<DriveRecipient> recipients, IEnumerable<string> roles, string? message, bool sendInvitation = true)
     {
         var requestUrl = $"{_graphClient.BaseUrl}/drives/{driveId}/items/{itemId}/invite";
         var inviteRequest = new BaseRequest(requestUrl, _graphClient, null)
@@ -532,7 +616,7 @@ public class SharePointController : ControllerBase
         {
             recipients = recipients.Select(r => new { email = r.Email }).ToList(),
             requireSignIn = true,
-            sendInvitation = true,
+            sendInvitation = sendInvitation,
             roles = roles.ToList(),
             message
         };
@@ -566,6 +650,85 @@ public class SharePointController : ControllerBase
         }
     }
 
+    private async Task<int> DisableSharingAsync(string driveId, string itemId, bool removeOnlyNonOwnerPermissions = true)
+    {
+        int removedCount = 0;
+        var permissions = await _graphClient.Drives[driveId].Items[itemId]
+            .Permissions
+            .Request()
+            .GetAsync();
+
+        foreach (var permission in permissions.CurrentPage)
+        {
+            // Skip owner permissions - they cannot and should not be removed
+            if (permission.Roles != null && permission.Roles.Contains("owner"))
+            {
+                continue;
+            }
+
+            try
+            {
+                await _graphClient.Drives[driveId].Items[itemId]
+                    .Permissions[permission.Id]
+                    .Request()
+                    .DeleteAsync();
+                removedCount++;
+            }
+            catch (ServiceException ex)
+            {
+                _logger.LogWarning(ex, "Failed to remove permission {PermissionId} from item {ItemId}", permission.Id, itemId);
+            }
+        }
+
+        return removedCount;
+    }
+
+    private async Task<int> DisableSharingRecursiveAsync(string driveId, string folderId)
+    {
+        int totalRemoved = 0;
+
+        try
+        {
+            var children = await _graphClient.Drives[driveId].Items[folderId].Children
+                .Request()
+                .Select("id,name,folder")
+                .GetAsync();
+
+            foreach (var child in children.CurrentPage)
+            {
+                // Disable sharing on this child
+                totalRemoved += await DisableSharingAsync(driveId, child.Id, removeOnlyNonOwnerPermissions: true);
+
+                // If this child is a folder, recursively process its contents
+                if (child.Folder != null)
+                {
+                    totalRemoved += await DisableSharingRecursiveAsync(driveId, child.Id);
+                }
+            }
+
+            // Get next page if it exists
+            while (children.NextPageRequest != null)
+            {
+                children = await children.NextPageRequest.GetAsync();
+                foreach (var child in children.CurrentPage)
+                {
+                    totalRemoved += await DisableSharingAsync(driveId, child.Id, removeOnlyNonOwnerPermissions: true);
+
+                    if (child.Folder != null)
+                    {
+                        totalRemoved += await DisableSharingRecursiveAsync(driveId, child.Id);
+                    }
+                }
+            }
+        }
+        catch (ServiceException ex)
+        {
+            _logger.LogError(ex, "Error processing children for folder {FolderId}", folderId);
+        }
+
+        return totalRemoved;
+    }
+
     private IActionResult HandleGraphException(ServiceException ex, string operation)
     {
         _logger.LogError(ex, "Graph request failed for {Operation}. Code: {Code}, Message: {Message}",
@@ -594,6 +757,7 @@ public class SharePointController : ControllerBase
         public string? Role { get; set; }
         public bool RemoveExistingPermissions { get; set; } = true;
         public string? Message { get; set; }
+        public bool SendInvitation { get; set; } = true;
     }
 
     public class AddPermissionsRequest
@@ -601,5 +765,11 @@ public class SharePointController : ControllerBase
         public List<string> Recipients { get; set; } = new();
         public string? Role { get; set; }
         public string? Message { get; set; }
+    }
+
+    public class DisableFolderSharingRequest
+    {
+        public string FolderPath { get; set; } = string.Empty;
+        public bool Recursive { get; set; } = false;
     }
 }
